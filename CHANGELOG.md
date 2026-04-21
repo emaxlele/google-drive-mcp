@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.0.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.2.0...v3.0.0) (2026-04-21)
+
+### Breaking Changes
+
+- **Multi-account support** — `tokens.json` has migrated to a versioned multi-account schema (v2). Existing single-account installs are upgraded automatically on first boot; a `tokens.json.v1-backup-<timestamp>` is left alongside for rollback. Downgrading to 2.x after running 3.x will not read the new file without manual restoration of the backup.
+- **Tool input schemas** — every non-admin tool now carries an optional top-level `account` parameter. MCP clients that cache schemas should refresh. Existing calls that omit `account` continue to work against the default/sole account.
+- **Admin-tool access** — `authGetStatus`, `authListScopes`, and `authTestFileAccess` no longer accept the `account` parameter (they always report on the active account); the new `manage_accounts` tool is the supported surface for per-account operations.
+
+### Features
+
+- **auth:** add `manage_accounts` tool with `list`, `add`, `remove`, and `set_default` actions for managing multiple connected Google accounts in a single process (local OAuth mode only; service-account and external-token modes remain single-identity).
+- **auth:** add optional `account` parameter to every non-admin tool so a single call can be routed to a specific connected Google account. Resolution order is: explicit `account` → global default → sole-eligible account. Write tools refuse ambiguous resolution and point at `manage_accounts set_default`.
+- **auth:** connect identity discovery — `manage_accounts add` requests `openid` and `userinfo.email` scopes so new accounts record their Google stable `sub` and email at consent time. Existing accounts are left untouched (no forced re-consent).
+- **auth:** atomic-rename writes for `tokens.json` plus a process-wide write queue that serializes concurrent refreshes from different accounts.
+- **auth:** per-alias refresh dedupe — N concurrent tool calls on the same account fire at most one refresh request to Google.
+
+### Migration
+
+- **Automatic.** First boot on 3.0 reads a pre-existing v1 `tokens.json`, writes the v2 equivalent in place, saves the old file as `tokens.json.v1-backup-<timestamp>`, and registers the migrated credentials under the alias `default`. The account is marked `pendingIdentity: true` — its email and Google `sub` are populated the next time you re-add or re-consent.
+- **Reserved aliases:** `default`, `all`, `*`, `stdio`, `service-account`, `external-token`, `test` — cannot be used with `manage_accounts add`.
+
+### Known Limitations
+
+- Cross-account read fanout (`account: string[]`) is planned but not yet shipped.
+- The Streamable HTTP transport shares one active-default account across all sessions on the same process; per-session isolation is a planned follow-up.
+- `manage_accounts remove` deletes local credentials but does not yet revoke the refresh token server-side — revoke manually via [Google Account Permissions](https://myaccount.google.com/permissions) if needed.
+
 ## [2.2.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.1.0...v2.2.0) (2026-04-20)
 
 ### Features
