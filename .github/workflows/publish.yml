@@ -25,7 +25,7 @@ jobs:
       - name: Upgrade npm
         run: npm i -g npm@latest && npm --version
 
-      # Kill any token-based auth that might exist (repo .npmrc, runner ~/.npmrc, etc.)
+      # Kill any token-based auth that might exist
       - name: Ensure no npm token auth is configured
         run: |
           rm -f .npmrc || true
@@ -52,4 +52,4 @@ jobs:
           fi
 
       - name: Publish (OIDC Trusted Publishing)
-        run: npm publish
+        run: npm publish --access public

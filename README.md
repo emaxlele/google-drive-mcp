@@ -1,6 +1,10 @@
 ## Runtime Configuration (CLI args or env vars)
 
-# Google Drive MCP Server
+# Google Drive MCP Server ([@emaxlele fork](https://github.com/emaxlele/google-drive-mcp))
+
+> **Fork** of [piotr-agier/google-drive-mcp](https://github.com/piotr-agier/google-drive-mcp) with configurable timeout and retry support.
+> Install: `npx -y @emaxlele/google-drive-mcp`
+> PR upstream: [piotr-agier/google-drive-mcp#113](https://github.com/piotr-agier/google-drive-mcp/pull/113)
 
 A Model Context Protocol (MCP) server that provides secure integration with Google Drive, Docs, Sheets, Slides, and Calendar. It allows Claude Desktop and other MCP clients to manage files in Google Drive and calendar events through a standardized interface.
 
@@ -128,10 +132,10 @@ You can run the server directly without installation:
 
 ```bash
 # Run the server (authentication happens automatically on first run)
-npx @piotr-agier/google-drive-mcp
+npx @emaxlele/google-drive-mcp
 
 # Optional: Run authentication manually if needed
-npx @piotr-agier/google-drive-mcp auth
+npx @emaxlele/google-drive-mcp auth
 ```
 
 ### Option 2: Local Installation
@@ -165,7 +169,7 @@ npx @piotr-agier/google-drive-mcp auth
 1. **Authenticate locally first** - Docker containers cannot open browsers for OAuth:
    ```bash
    # Using npx
-   npx @piotr-agier/google-drive-mcp auth
+   npx @emaxlele/google-drive-mcp auth
 
    # Or using local installation
    npm run auth
@@ -1079,7 +1083,7 @@ Run the auth command when you need to:
 
 ```bash
 # Using npx
-npx @piotr-agier/google-drive-mcp auth
+npx @emaxlele/google-drive-mcp auth
 
 # Using local installation
 npm run auth
@@ -1163,7 +1167,7 @@ kill -9 <PID>
 export GOOGLE_DRIVE_MCP_AUTH_PORT=3100
 
 # Re-run authentication
-npx @piotr-agier/google-drive-mcp auth
+npx @emaxlele/google-drive-mcp auth
 ```
 
 #### "Tokens expired" or "Invalid grant"
@@ -1175,7 +1179,7 @@ npx @piotr-agier/google-drive-mcp auth
 ```bash
 # Clear old tokens and re-authenticate
 rm ~/.config/google-drive-mcp/tokens.json
-npx @piotr-agier/google-drive-mcp auth
+npx @emaxlele/google-drive-mcp auth
 ```
 
 **For production:**
@@ -1235,7 +1239,7 @@ Error: Google Sheets API has not been used in project...
 **Solution:**
 ```bash
 # 1. Authenticate outside Docker first
-npx @piotr-agier/google-drive-mcp auth
+npx @emaxlele/google-drive-mcp auth
 
 # 2. Verify tokens exist
 ls -la ~/.config/google-drive-mcp/tokens.json
@@ -1278,14 +1282,14 @@ Enable detailed logging:
 ```bash
 # Set debug environment variable
 export DEBUG=google-drive-mcp:*
-npx @piotr-agier/google-drive-mcp
+npx @emaxlele/google-drive-mcp
 ```
 
 ### Getting Help
 
 1. **Check logs**: Server logs errors to stderr
-2. **Verify setup**: Run `npx @piotr-agier/google-drive-mcp help`
-3. **Test auth**: Run `npx @piotr-agier/google-drive-mcp auth`
+2. **Verify setup**: Run `npx @emaxlele/google-drive-mcp help`
+3. **Test auth**: Run `npx @emaxlele/google-drive-mcp auth`
 4. **Report issues**: [GitHub Issues](https://github.com/piotr-agier/google-drive-mcp/issues)
 
 ## Development
