@@ -1,0 +1,45 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    - cron: '0 6 */13 * *'  # ogni 13 giorni alle 06:00 UTC
+  workflow_dispatch:               # bottone manuale disponibile
+
+jobs:
+  sync:
+    name: Sync piotr-agier/google-drive-mcp → emaxlele/google-drive-mcp
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "emaxlele"
+          git config user.email "emaxlele.lavoro@gmail.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/piotr-agier/google-drive-mcp.git
+
+      - name: Fetch upstream
+        run: git fetch upstream --tags
+
+      - name: Sync master branch
+        run: |
+          git checkout master
+          git merge --no-edit upstream/master
+
+      - name: Push to fork
+        run: git push origin master --follow-tags
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Sync failed — likely a merge conflict. Resolve manually and re-run."
