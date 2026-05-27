@@ -1326,6 +1326,147 @@ describe('Docs tools', () => {
     });
   });
 
+  // --- readGoogleDocPaginated ---
+  describe('readGoogleDocPaginated', () => {
+    const longDoc = (text: string) => ({
+      documentId: 'doc-1', title: 'Big Doc',
+      body: { content: [{ paragraph: { elements: [{ textRun: { content: text } }] } }] },
+    });
+
+    it('returns first page with hasMore and nextOffset', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('X'.repeat(120)) }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
+      assert.equal(res.isError, false);
+      const r = JSON.parse(res.content[0].text);
+      assert.equal(r.content.length, 50);
+      assert.equal(r.outputLength, 120);
+      assert.equal(r.documentLength, 120);
+      assert.equal(r.hasMore, true);
+      assert.equal(r.nextOffset, 50);
+    });
+
+    it('last page reports hasMore false and nextOffset at end', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Y'.repeat(40)) }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 0, limit: 50000 });
+      const r = JSON.parse(res.content[0].text);
+      assert.equal(r.content.length, 40);
+      assert.equal(r.hasMore, false);
+      assert.equal(r.nextOffset, 40);
+    });
+
+    it('offset beyond document returns empty content', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Z'.repeat(30)) }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', offset: 9999, limit: 50 });
+      const r = JSON.parse(res.content[0].text);
+      assert.equal(r.content, '');
+      assert.equal(r.hasMore, false);
+      assert.equal(r.nextOffset, 30);
+    });
+
+    it('markdown format includes the title in the first page', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: longDoc('Body text\n') }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', format: 'markdown', offset: 0, limit: 50000 });
+      const r = JSON.parse(res.content[0].text);
+      assert.ok(r.content.startsWith('# Big Doc'), 'first page should start with the markdown title');
+      assert.ok(r.outputLength > r.documentLength, 'outputLength includes the title prefix, documentLength does not');
+    });
+
+    it('reads a specific tab by tabId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: mockDocs.multiTab() }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', tabId: 'tab-2', offset: 0, limit: 50000 });
+      const r = JSON.parse(res.content[0].text);
+      assert.ok(r.content.includes('Second tab'));
+      assert.ok(!r.content.includes('First tab'));
+    });
+
+    it('returns error for unknown tabId', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: mockDocs.multiTab() }));
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', tabId: 'nope' });
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.includes('not found'));
+    });
+
+    it('rejects the removed json format', async () => {
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', { documentId: 'doc-1', format: 'json' });
+      assert.equal(res.isError, true);
+    });
+
+    it('validation error when documentId missing', async () => {
+      const res = await callTool(ctx.client, 'readGoogleDocPaginated', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
+  // --- getGoogleDocContentPaginated ---
+  describe('getGoogleDocContentPaginated', () => {
+    const indexedDoc = () => ({
+      documentId: 'doc-1', title: 'Indexed Doc',
+      body: { content: [
+        { paragraph: { elements: [{ textRun: { content: 'Alpha\n' }, startIndex: 1, endIndex: 7 }] } },
+        { paragraph: { elements: [{ textRun: { content: 'Bravo\n' }, startIndex: 7, endIndex: 13 }] } },
+        { paragraph: { elements: [{ textRun: { content: 'Charlie\n' }, startIndex: 13, endIndex: 21 }] } },
+      ] },
+    });
+    const oneLongLine = () => ({
+      documentId: 'doc-1', title: 'One Long Line',
+      body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Q'.repeat(200) + '\n' }, startIndex: 1, endIndex: 202 }] } }] },
+    });
+
+    it('returns indexed content with hasMore and nextOffset', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
+      const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50000 });
+      assert.equal(res.isError, false);
+      const r = JSON.parse(res.content[0].text);
+      assert.ok(r.content.includes('[1-6] Alpha'));
+      assert.ok(r.content.includes('[7-12] Bravo'));
+      assert.equal(r.hasMore, false);
+      assert.equal(typeof r.outputLength, 'number');
+      assert.equal(typeof r.documentLength, 'number');
+    });
+
+    it('snaps the page end to a line boundary so index prefixes are never split', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
+      const page1 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
+      const r1 = JSON.parse(page1.content[0].text);
+      assert.ok(r1.content.endsWith('\n'), 'snapped page must end on a newline');
+      assert.ok(r1.content.includes('[1-6] Alpha'), 'the Alpha line must be whole');
+      assert.ok(!r1.content.includes('[7-12'), 'the Bravo prefix must not be partially included');
+      assert.equal(r1.hasMore, true);
+
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
+      const page2 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: r1.nextOffset, limit: 50 });
+      const r2 = JSON.parse(page2.content[0].text);
+      assert.ok(r2.content.startsWith('[7-12] Bravo'), 'next page must start at a clean index prefix');
+    });
+
+    it('makes forward progress when a single line exceeds the limit', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: oneLongLine() }));
+      const page1 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 0, limit: 50 });
+      const r1 = JSON.parse(page1.content[0].text);
+
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: oneLongLine() }));
+      const page2 = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: r1.nextOffset, limit: 50 });
+      const r2 = JSON.parse(page2.content[0].text);
+      assert.ok(r2.nextOffset > r1.nextOffset, 'pagination must advance even with no newline in the window');
+      assert.ok(r2.content.length > 0, 'page must not be empty');
+      assert.equal(r2.hasMore, true);
+    });
+
+    it('offset beyond document returns empty content', async () => {
+      ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: indexedDoc() }));
+      const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', { documentId: 'doc-1', offset: 999999, limit: 50 });
+      const r = JSON.parse(res.content[0].text);
+      assert.equal(r.content, '');
+      assert.equal(r.hasMore, false);
+      assert.equal(r.nextOffset, r.outputLength);
+    });
+
+    it('validation error when documentId missing', async () => {
+      const res = await callTool(ctx.client, 'getGoogleDocContentPaginated', {});
+      assert.equal(res.isError, true);
+    });
+  });
+
   describe('deleteComment', () => {
     it('happy path', async () => {
       const res = await callTool(ctx.client, 'deleteComment', { documentId: 'doc-1', commentId: 'c1' });
@@ -1441,6 +1582,44 @@ describe('Docs tools', () => {
       assert.equal(res.isError, true);
     });
 
+    it('threads tabId into the footnote-reference location (#114)', async () => {
+      const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 5, tabId: 'tab-2' });
+      assert.equal(res.isError, false);
+      assert.ok(res.content[0].text.includes('in tab tab-2'));
+
+      const req = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.equal(req.createFootnote.location.index, 5);
+      assert.equal(req.createFootnote.location.tabId, 'tab-2');
+    });
+
+    it('threads tabId into endOfSegmentLocation (#114)', async () => {
+      const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', endOfSegment: true, tabId: 'tab-2' });
+      assert.equal(res.isError, false);
+
+      const req = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.deepEqual(req.createFootnote.endOfSegmentLocation, { segmentId: '', tabId: 'tab-2' });
+    });
+
+    it('threads tabId AND segmentId into the footnote-body insert (#114)', async () => {
+      const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 3, content: 'See ref.', tabId: 'tab-2' });
+      assert.equal(res.isError, false);
+
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      assert.equal(calls.length, 2);
+      const secondReq = calls[1].args[0].requestBody.requests[0];
+      assert.equal(secondReq.insertText.location.segmentId, 'fn-123');
+      assert.equal(secondReq.insertText.location.tabId, 'tab-2');
+    });
+
+    it('omits tabId from locations when none is given (#114)', async () => {
+      const res = await callTool(ctx.client, 'createFootnote', { documentId: 'doc-1', index: 5 });
+      assert.equal(res.isError, false);
+      assert.ok(!res.content[0].text.includes('in tab'));
+
+      const req = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate')[0].args[0].requestBody.requests[0];
+      assert.equal(req.createFootnote.location.tabId, undefined);
+    });
+
     it('returns partial-success error when content insertion fails', async () => {
       let callCount = 0;
       ctx.mocks.docs.service.documents.batchUpdate._setImpl(async () => {
@@ -1462,6 +1641,252 @@ describe('Docs tools', () => {
 
       const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
       assert.equal(calls.length, 2);
+    });
+  });
+
+  // --- #114: tabId honored in table/format/smartchip editing handlers ---
+  describe('tabId scoping for editing tools (#114)', () => {
+    // A document content element holding a single 1x1 table at startIndex 5.
+    const tableContent = () => [{
+      startIndex: 5,
+      table: { tableRows: [{ tableCells: [{ startIndex: 10, endIndex: 20, content: [] }] }] },
+    }];
+
+    after(() => {
+      ctx.mocks.docs.service.documents.get._resetImpl();
+      ctx.mocks.docs.service.documents.batchUpdate._resetImpl();
+    });
+
+    const lastRequests = () => {
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate');
+      return calls[calls.length - 1]?.args?.[0]?.requestBody?.requests;
+    };
+
+    describe('insertTable', () => {
+      it('omits tabId from the location by default', async () => {
+        const res = await callTool(ctx.client, 'insertTable', { documentId: 'doc-1', rows: 2, columns: 2, index: 1 });
+        assert.equal(res.isError, false);
+        assert.ok(!res.content[0].text.includes('in tab'));
+        assert.equal(lastRequests()[0].insertTable.location.tabId, undefined);
+      });
+
+      it('threads tabId into the location', async () => {
+        const res = await callTool(ctx.client, 'insertTable', { documentId: 'doc-1', rows: 2, columns: 2, index: 1, tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        const req = lastRequests()[0].insertTable;
+        assert.equal(req.location.tabId, 'tab-2');
+        assert.equal(req.location.index, 1);
+      });
+    });
+
+    describe('insertSmartChip', () => {
+      it('omits tabId from the location by default', async () => {
+        const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person', personEmail: 'a@b.com' });
+        assert.equal(res.isError, false);
+        assert.equal(lastRequests()[0].insertPerson.location.tabId, undefined);
+      });
+
+      it('threads tabId into the location', async () => {
+        const res = await callTool(ctx.client, 'insertSmartChip', { documentId: 'doc-1', index: 1, chipType: 'person', personEmail: 'a@b.com', tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.equal(lastRequests()[0].insertPerson.location.tabId, 'tab-2');
+      });
+    });
+
+    // The no-tabId path must stay byte-for-byte the cheap one: a narrow-field
+    // GET (never includeTabsContent) and no tabId leaking into the range. These
+    // guard the findTextRange/getParagraphRange tab/no-tab branching (#114).
+    const lastGet = () => {
+      const calls = ctx.mocks.docs.tracker.getCalls('documents.get');
+      return calls[calls.length - 1]?.args?.[0];
+    };
+    const assertNoTabGets = () => {
+      for (const c of ctx.mocks.docs.tracker.getCalls('documents.get')) {
+        assert.ok(!c.args?.[0]?.includeTabsContent, 'default path must not use includeTabsContent');
+      }
+      assert.ok(typeof lastGet()?.fields === 'string', 'default path must use a narrow field mask');
+    };
+
+    describe('applyTextStyle', () => {
+      it('uses the narrow-field GET and leaks no tabId by default (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
+        const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', textToFind: 'Hello', bold: true });
+        assert.equal(res.isError, false);
+        assert.ok(!res.content[0].text.includes('in tab'));
+        assertNoTabGets();
+        assert.equal(lastRequests()[0].updateTextStyle.range.tabId, undefined);
+      });
+
+      it('threads tabId into the range (explicit-index mode)', async () => {
+        const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', startIndex: 1, endIndex: 5, bold: true, tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.equal(lastRequests()[0].updateTextStyle.range.tabId, 'tab-2');
+      });
+
+      it('resolves textToFind within the target tab', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [
+            { tabProperties: { tabId: 'tab-1' }, documentTab: { body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Other\n' }, startIndex: 1, endIndex: 7 }] } }] } } },
+            { tabProperties: { tabId: 'tab-2' }, documentTab: { body: { content: [{ paragraph: { elements: [{ textRun: { content: 'Find me here\n' }, startIndex: 1, endIndex: 14 }] } }] } } },
+          ] },
+        }));
+        const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', textToFind: 'Find me', bold: true, tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+
+        const getCalls = ctx.mocks.docs.tracker.getCalls('documents.get');
+        assert.equal(getCalls[getCalls.length - 1]?.args?.[0]?.includeTabsContent, true);
+        assert.equal(lastRequests()[0].updateTextStyle.range.tabId, 'tab-2');
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+
+      it('returns the standard not-found error for an unknown tabId (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [{ tabProperties: { tabId: 'tab-1' }, documentTab: { body: { content: [] } } }] },
+        }));
+        const before = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length;
+        const res = await callTool(ctx.client, 'applyTextStyle', { documentId: 'doc-1', textToFind: 'x', bold: true, tabId: 'missing' });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Tab with ID "missing" not found'));
+        assert.ok(res.content[0].text.includes('listDocumentTabs'));
+        assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before);
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+    });
+
+    describe('applyParagraphStyle', () => {
+      it('uses narrow-field GETs and leaks no tabId by default (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
+        const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'Hello', alignment: 'CENTER' });
+        assert.equal(res.isError, false);
+        assert.ok(!res.content[0].text.includes('in tab'));
+        assertNoTabGets();
+        assert.equal(lastRequests()[0].updateParagraphStyle.range.tabId, undefined);
+      });
+
+      it('resolves indexWithinParagraph within the target tab', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [
+            { tabProperties: { tabId: 'tab-2' }, documentTab: { body: { content: [{ startIndex: 1, endIndex: 14, paragraph: { elements: [] } }] } } },
+          ] },
+        }));
+        const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', indexWithinParagraph: 2, alignment: 'CENTER', tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.equal(lastRequests()[0].updateParagraphStyle.range.tabId, 'tab-2');
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+
+      it('resolves tab-scoped textToFind with a single GET (#114 follow-up)', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [
+            { tabProperties: { tabId: 'tab-2' }, documentTab: { body: { content: [
+              { startIndex: 1, endIndex: 14, paragraph: { elements: [{ textRun: { content: 'Find me here\n' }, startIndex: 1, endIndex: 14 }] } },
+            ] } } },
+          ] },
+        }));
+        const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'Find me', alignment: 'CENTER', tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('in tab tab-2'));
+
+        // The whole point of the optimization: range + enclosing-paragraph
+        // resolution share one includeTabsContent fetch, not two.
+        const getCalls = ctx.mocks.docs.tracker.getCalls('documents.get');
+        assert.equal(getCalls.length, 1, 'tab-scoped textToFind must resolve from a single GET');
+        assert.equal(getCalls[0].args[0].includeTabsContent, true);
+
+        const range = lastRequests()[0].updateParagraphStyle.range;
+        assert.equal(range.tabId, 'tab-2');
+        assert.equal(range.startIndex, 1);
+        assert.equal(range.endIndex, 14);
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+
+      it('returns the standard not-found error and issues no batchUpdate for an unknown tabId (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [{ tabProperties: { tabId: 'tab-1' }, documentTab: { body: { content: [] } } }] },
+        }));
+        const before = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length;
+        const res = await callTool(ctx.client, 'applyParagraphStyle', { documentId: 'doc-1', textToFind: 'x', alignment: 'CENTER', tabId: 'missing' });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Tab with ID "missing" not found'));
+        assert.ok(res.content[0].text.includes('listDocumentTabs'));
+        assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before);
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+    });
+
+    describe('createParagraphBullets', () => {
+      it('uses the narrow-field GET and leaks no tabId by default (textToFind)', async () => {
+        ctx.mocks.docs.service.documents.get._resetImpl(); // genuine default mock
+        const res = await callTool(ctx.client, 'createParagraphBullets', { documentId: 'doc-1', textToFind: 'Hello', bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE' });
+        assert.equal(res.isError, false);
+        assert.ok(!res.content[0].text.includes('in tab'));
+        assertNoTabGets();
+        assert.equal(lastRequests()[0].createParagraphBullets.range.tabId, undefined);
+      });
+
+      it('threads tabId into the range (explicit-index mode)', async () => {
+        const res = await callTool(ctx.client, 'createParagraphBullets', { documentId: 'doc-1', startIndex: 1, endIndex: 5, bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE', tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('in tab tab-2'));
+        assert.equal(lastRequests()[0].createParagraphBullets.range.tabId, 'tab-2');
+      });
+
+      it('threads tabId into the range when removing bullets (NONE)', async () => {
+        const res = await callTool(ctx.client, 'createParagraphBullets', { documentId: 'doc-1', startIndex: 1, endIndex: 5, bulletPreset: 'NONE', tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.equal(lastRequests()[0].deleteParagraphBullets.range.tabId, 'tab-2');
+      });
+    });
+
+    describe('editTableCell', () => {
+      it('operates on the default body and emits no tabId when none is given', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({ data: { body: { content: tableContent() } } }));
+        const res = await callTool(ctx.client, 'editTableCell', { documentId: 'doc-1', tableStartIndex: 5, rowIndex: 0, columnIndex: 0, textContent: 'Hi' });
+        assert.equal(res.isError, false);
+        assert.ok(!res.content[0].text.includes('in tab'));
+        const reqs = lastRequests();
+        for (const r of reqs) {
+          const inner = r.deleteContentRange ?? r.insertText;
+          assert.equal((inner.range ?? inner.location).tabId, undefined);
+        }
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+
+      it('finds the table inside the target tab and threads tabId into every request', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [{ tabProperties: { tabId: 'tab-2' }, documentTab: { body: { content: tableContent() } } }] },
+        }));
+        const res = await callTool(ctx.client, 'editTableCell', { documentId: 'doc-1', tableStartIndex: 5, rowIndex: 0, columnIndex: 0, textContent: 'Hi', bold: true, alignment: 'CENTER', tabId: 'tab-2' });
+        assert.equal(res.isError, false);
+        assert.ok(res.content[0].text.includes('in tab tab-2'));
+
+        const getCalls = ctx.mocks.docs.tracker.getCalls('documents.get');
+        assert.equal(getCalls[getCalls.length - 1]?.args?.[0]?.includeTabsContent, true);
+
+        const reqs = lastRequests();
+        assert.ok(reqs.length >= 3);
+        assert.equal(reqs.find((r: any) => r.deleteContentRange).deleteContentRange.range.tabId, 'tab-2');
+        assert.equal(reqs.find((r: any) => r.insertText).insertText.location.tabId, 'tab-2');
+        assert.equal(reqs.find((r: any) => r.updateTextStyle).updateTextStyle.range.tabId, 'tab-2');
+        assert.equal(reqs.find((r: any) => r.updateParagraphStyle).updateParagraphStyle.range.tabId, 'tab-2');
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
+
+      it('returns the standard not-found error and issues no batchUpdate for an unknown tabId', async () => {
+        ctx.mocks.docs.service.documents.get._setImpl(async () => ({
+          data: { tabs: [{ tabProperties: { tabId: 'tab-1' }, documentTab: { body: { content: tableContent() } } }] },
+        }));
+        const before = ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length;
+        const res = await callTool(ctx.client, 'editTableCell', { documentId: 'doc-1', tableStartIndex: 5, rowIndex: 0, columnIndex: 0, textContent: 'Hi', tabId: 'missing' });
+        assert.equal(res.isError, true);
+        assert.ok(res.content[0].text.includes('Tab with ID "missing" not found'));
+        assert.equal(ctx.mocks.docs.tracker.getCalls('documents.batchUpdate').length, before);
+        ctx.mocks.docs.service.documents.get._resetImpl();
+      });
     });
   });
 });

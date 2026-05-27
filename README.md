@@ -302,6 +302,8 @@ export GOOGLE_DRIVE_MCP_AUTH_PORT=3100
 
 The server will try 5 consecutive ports starting from the configured value (e.g., 3100–3104).
 
+The callback server binds to the loopback interface and the OAuth redirect URI uses the loopback IP — `http://127.0.0.1:<port>/oauth2callback` (default range `127.0.0.1:3000`–`127.0.0.1:3004`). **Desktop app** OAuth clients (the recommended type — see [Create OAuth 2.0 Credentials](#4-create-oauth-20-credentials)) accept any loopback redirect automatically and need no action. If you instead use a **Web application** OAuth client, you must register `http://127.0.0.1:<port>/oauth2callback` for every port in the range as an authorized redirect URI in Google Cloud Console, or authentication fails with `redirect_uri_mismatch`.
+
 ### Token Storage
 
 Authentication tokens are stored securely following the XDG Base Directory specification:
@@ -317,6 +319,42 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 - Never commit tokens to version control
 - Tokens auto-refresh before expiration
 - Google OAuth apps in "Testing" status have refresh tokens that expire after 7 days (Google's policy)
+
+## Runtime Configuration (CLI args or env vars)
+
+Configure timeouts and retry behavior via CLI flags (preferred) or environment variables.
+CLI flags take priority over env vars.
+
+> **Scope:** these settings currently apply to the `createGoogleDoc` content-insertion
+> call (the `documents.batchUpdate` that was prone to silent timeouts). They are not
+> yet wired into every Google API call.
+
+### CLI flags
+
+| Flag                      | Default | Description                                                                 |
+| ------------------------- | ------- | --------------------------------------------------------------------------- |
+| `--api-timeout=<ms>`      | 120000  | Per-attempt timeout for the retry-wrapped call; `0` disables the timeout     |
+| `--retry-max=<N>`         | 3       | Max retry attempts on retryable errors (429/503/504, timeouts, network); `0` disables retries |
+| `--retry-base-delay=<ms>` | 1000    | Base delay for exponential backoff (capped at 30s, with jitter)             |
+
+### Environment variables (fallback)
+
+- `GOOGLE_DRIVE_MCP_API_TIMEOUT`
+- `GOOGLE_DRIVE_MCP_RETRY_MAX`
+- `GOOGLE_DRIVE_MCP_RETRY_BASE_DELAY`
+
+### Example (Claude Desktop config)
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["@piotr-agier/google-drive-mcp", "--api-timeout=180000", "--retry-max=5"]
+    }
+  }
+}
+```
 
 ## Usage with Claude Desktop
 
@@ -543,9 +581,22 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `format`: Output format — `text`, `json`, or `markdown` (optional, default: text)
   - `maxLength`: Maximum characters to return (optional)
 
+- **readGoogleDocPaginated** - Read a large Google Doc one page at a time (avoids host output-size truncation)
+  - `documentId`: Document ID
+  - `format`: Output format — `text` or `markdown` (optional, default: text)
+  - `offset`: Character offset into the output text (optional, default: 0; pass the previous response's `nextOffset`)
+  - `limit`: Maximum characters per page (optional, default: 50000, max: 80000)
+  - `tabId`: Read a specific tab by ID (optional)
+
 - **getGoogleDocContent** - Get document content with text indices for formatting
   - `documentId`: Document ID
   - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
+
+- **getGoogleDocContentPaginated** - Paginated `getGoogleDocContent`; page ends snap to a line boundary where possible (a single line longer than `limit` is hard-cut to make forward progress)
+  - `documentId`: Document ID
+  - `includeFormatting`: Include font, style, and color info for each text span (optional, default: false)
+  - `offset`: Character offset into the formatted output (optional, default: 0; pass the previous response's `nextOffset`)
+  - `limit`: Maximum characters per page (optional, default: 50000, max: 80000)
 
 - **listDocumentTabs** - List all tabs in a Google Doc with their IDs and hierarchy
   - `documentId`: Document ID
@@ -921,6 +972,7 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
 - **getCalendarEvent** - Get a single calendar event by ID
   - `eventId`: Event ID
   - `calendarId`: Calendar ID (optional, default: primary)
+  - Response includes the event's file `attachments` (title and URL) when present
 
 - **createCalendarEvent** - Create a new calendar event with Google Meet support
   - `summary`: Event title
@@ -934,6 +986,7 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `conferenceType`: `hangoutsMeet` to add Google Meet link (optional)
   - `recurrence`: Array of RRULE strings for recurring events (optional)
   - `visibility`: `default`, `public`, `private`, or `confidential` (optional)
+  - `attachments`: Array of `{ fileUrl, title?, mimeType? }` (optional, max 25; for Drive files use the file's share URL as `fileUrl`)
 
 - **updateCalendarEvent** - Update an existing calendar event
   - `eventId`: Event ID
@@ -941,6 +994,7 @@ When binding to `127.0.0.1` (default), DNS rebinding protection is automatically
   - `summary`, `description`, `location`: Updated fields (optional)
   - `start`, `end`: Updated times (optional)
   - `attendees`: Updated attendee emails, replaces existing (optional)
+  - `attachments`: Array of `{ fileUrl, title?, mimeType? }`, replaces existing (optional, max 25); omit to keep current attachments, or pass `[]` to remove all
   - `sendUpdates`: `all`, `externalOnly`, or `none` (optional, default: none)
 
 - **deleteCalendarEvent** - Delete a calendar event
@@ -971,6 +1025,29 @@ Set the standard `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point 
 ```
 
 **Note:** The service account must have access to the Google Drive files/folders you want to work with. For Shared Drives, grant the service account's email address the appropriate permissions.
+
+#### Domain-Wide Delegation (impersonating a user)
+
+By default a service account acts as itself. Some Google APIs (for example Drive reads scoped to a user's "My Drive", or Calendar ACL writes against a personal calendar) require acting as a real Workspace user. Set `GOOGLE_DRIVE_MCP_SUBJECT` to the email of the user to impersonate:
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["@piotr-agier/google-drive-mcp"],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/service-account-key.json",
+        "GOOGLE_DRIVE_MCP_SUBJECT": "user@your-domain.com"
+      }
+    }
+  }
+}
+```
+
+**Prerequisite:** a Workspace admin must authorize the service account's client ID for the requested scopes under **Admin console > Security > API controls > Manage Domain-wide Delegation**. The scopes granted there must cover the scopes the server requests (see [OAuth Scope Configuration](#oauth-scope-configuration)).
+
+`GOOGLE_DRIVE_MCP_SCOPES` applies in service-account mode too, so you can narrow the JWT to a subset of the delegated scopes.
 
 ### 2. External OAuth Token Mode
 
@@ -1116,6 +1193,7 @@ OAuth credentials not found. Please provide credentials using one of these metho
 1. **Wrong credential type**: Must be "Desktop app", not "Web application"
 2. **Port blocked**: Ports 3000-3004 must be available (or custom range if `GOOGLE_DRIVE_MCP_AUTH_PORT` is set)
 3. **Test user not added**: Add your email in OAuth consent screen
+4. **`redirect_uri_mismatch` (Web application clients only)**: The callback redirect URI uses the loopback IP `http://127.0.0.1:<port>/oauth2callback`. Switch to a "Desktop app" client (recommended), or add `http://127.0.0.1:3000/oauth2callback` … `http://127.0.0.1:3004/oauth2callback` (plus any custom `GOOGLE_DRIVE_MCP_AUTH_PORT` range) as authorized redirect URIs
 
 **Solution:**
 ```bash
@@ -1323,12 +1401,14 @@ npm run typecheck # Type checking without compilation
 |----------|-------------|---------|---------|
 | `GOOGLE_DRIVE_MCP_TOKEN_PATH` | Override token storage location | `~/.config/google-drive-mcp/tokens.json` | `/custom/path/tokens.json` |
 | `GOOGLE_DRIVE_MCP_AUTH_PORT` | Starting port for OAuth callback server (uses 5 consecutive ports) | `3000` | `3100` |
+| `GOOGLE_DRIVE_MCP_DISABLE_RESOURCES` | Disable the MCP resource protocol (`gdrive:///` listing/reading); tools stay available. For tools-only clients or clients that hang enumerating a large Drive (e.g. Gemini CLI). Accepts `1/0`, `true/false`, `yes/no`, `on/off`. Also available as the `--no-resources[=<bool>]` flag (`--no-resources=false` re-enables, overriding a truthy env value) | (enabled) | `1` |
 | `DEBUG` | Enable debug logging | (disabled) | `google-drive-mcp:*` |
 
 **External Authentication** (alternative to local OAuth flow):
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON key file | `/path/to/service-account.json` |
+| `GOOGLE_DRIVE_MCP_SUBJECT` | Workspace user to impersonate via domain-wide delegation (optional, service account mode) | `user@your-domain.com` |
 | `GOOGLE_DRIVE_MCP_ACCESS_TOKEN` | Pre-obtained OAuth access token | `ya29.a0AfH6SM...` |
 | `GOOGLE_DRIVE_MCP_REFRESH_TOKEN` | Refresh token for auto-refresh (optional) | `1//0dx...` |
 | `GOOGLE_DRIVE_MCP_CLIENT_ID` | OAuth client ID (required with refresh token) | `123456789.apps.googleusercontent.com` |

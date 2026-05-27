@@ -1,5 +1,6 @@
 import type { drive_v3, calendar_v3 } from 'googleapis';
 import type { google as GoogleApisType } from 'googleapis';
+import type { RuntimeConfig } from './utils/cliArgs.js';
 
 export interface ToolResult {
   [key: string]: unknown;
@@ -23,6 +24,7 @@ export interface ToolContext {
   resolveFolderId: (input: string | undefined) => Promise<string>;
   checkFileExists: (name: string, parentFolderId?: string) => Promise<string | null>;
   validateTextFileExtension: (name: string) => void;
+  runtimeConfig: RuntimeConfig;
 }
 
 export function errorResponse(message: string): ToolResult {

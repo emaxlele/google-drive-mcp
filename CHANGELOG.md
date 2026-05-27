@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- **calendar:** surface event `attachments` in `getCalendarEvent`/`getCalendarEvents` responses, and accept an `attachments` array (max 25) in `createCalendarEvent`/`updateCalendarEvent` (sets the `supportsAttachments` API flag). `updateCalendarEvent` now also preserves an event's existing attachments instead of silently dropping them when `attachments` is not supplied ([#110](https://github.com/piotr-agier/google-drive-mcp/issues/110))
+- **auth:** support Workspace domain-wide delegation via `GOOGLE_DRIVE_MCP_SUBJECT`; `GOOGLE_DRIVE_MCP_SCOPES` is now honored in service-account mode ([#107](https://github.com/piotr-agier/google-drive-mcp/pull/107))
+- **resources:** add `GOOGLE_DRIVE_MCP_DISABLE_RESOURCES` env var (and `--no-resources` flag) to opt out of the MCP resource protocol (`gdrive:///` listing/reading); tools stay available. For tools-only clients or clients that hang enumerating a large Drive. The env var and `--no-resources[=<bool>]` accept `1/0`, `true/false`, `yes/no`, `on/off`; `--no-resources=false` re-enables resources, overriding a truthy env value ([#115](https://github.com/piotr-agier/google-drive-mcp/issues/115), [#128](https://github.com/piotr-agier/google-drive-mcp/pull/128))
+
+### Bug Fixes
+
+- **resources:** raise the `resources/list` page size from 10 to 1000 (Drive API max) so clients that eagerly enumerate the entire Drive (e.g. Gemini CLI) no longer hang during initialization ([#111](https://github.com/piotr-agier/google-drive-mcp/issues/111), [#128](https://github.com/piotr-agier/google-drive-mcp/pull/128))
+- **docs:** honor `tabId` in `insertTable`, `editTableCell`, `insertSmartChip`, `createFootnote`, `applyTextStyle`/`formatGoogleDocText`, `applyParagraphStyle`/`formatGoogleDocParagraph`, and `createParagraphBullets` — these previously ignored `tabId` and silently edited the default tab of multi-tab documents while reporting success ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#126](https://github.com/piotr-agier/google-drive-mcp/pull/126))
+- **auth:** use loopback IP `127.0.0.1` instead of `localhost` for the OAuth callback redirect URI, matching the IPv4-only callback-server bind so the redirect resolves to the bound address on dual-stack hosts ([#124](https://github.com/piotr-agier/google-drive-mcp/pull/124)). Desktop-app OAuth clients (the recommended type) are unaffected; "Web application" clients that registered a `http://localhost:<port>` redirect must re-register it as `http://127.0.0.1:<port>` or auth fails with `redirect_uri_mismatch` — see README Troubleshooting
+
+### Performance Improvements
+
+- **docs:** `applyParagraphStyle` with `textToFind` + `tabId` now resolves the matched range and its enclosing paragraph from a single `documents.get`, instead of two full unmasked `includeTabsContent` fetches of the same document. The non-tab path is unchanged ([#114](https://github.com/piotr-agier/google-drive-mcp/issues/114), [#127](https://github.com/piotr-agier/google-drive-mcp/pull/127))
+
 ## [2.2.0](https://github.com/piotr-agier/google-drive-mcp/compare/v2.1.0...v2.2.0) (2026-04-20)
 
 ### Features
